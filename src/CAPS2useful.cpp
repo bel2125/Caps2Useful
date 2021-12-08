@@ -3,10 +3,11 @@
 #include "Windows.h"
 #define MAX_WPATH (MAX_PATH) /* Windows path limit of 260 wchar_t */
 
-#define VERSION "0.5.0.1"
+#define VERSION "0.5.0.3"
 
 /* Tell Visual Studio to use C according to the C standard. */
 #define _CRT_SECURE_NO_DEPRECATE
+#include <ctype.h>
 #include <malloc.h>
 #include <map>
 #include <stdint.h>
@@ -133,21 +134,40 @@ LowLevelKeyboardProc(_In_ int nCode, _In_ WPARAM wParam, _In_ LPARAM lParam)
 					}
 					case 'K': {
 						uint8_t hex = 0;
-						int hi = 1;
+						int step = 0;
+						std::vector<uint8_t> toRelease;
 
 						for (uint8_t e : act.act) {
 							int8_t a = fromHex(e);
-							if (a < 0)
+							if ((a < 0) && (step < 2)) {
 								break;
-
-							if (hi) {
-								hex = (uint8_t)a << 4;
-							} else {
-								hex += (uint8_t)a;
-								keybd_event(hex, 0, 0, 0);
-								keybd_event(hex, 0, KEYEVENTF_KEYUP, 0);
 							}
-							hi = !hi;
+
+							if (step == 0) {
+								hex = (uint8_t)a << 4;
+								step++;
+							} else if (step == 1) {
+								hex += (uint8_t)a;
+								step++;
+							} else {
+								keybd_event(hex, 0, 0, 0);
+								if (e == '+') {
+									toRelease.push_back(hex);
+								} else {
+									keybd_event(hex, 0, KEYEVENTF_KEYUP, 0);
+								}
+								if (e == '-') {
+									for (uint8_t k : toRelease) {
+										keybd_event(k, 0, KEYEVENTF_KEYUP, 0);
+									}
+									toRelease.clear();
+								}
+								step = 0;
+							}
+						}
+
+						for (uint8_t k : toRelease) {
+							keybd_event(k, 0, KEYEVENTF_KEYUP, 0);
 						}
 						break;
 					}
@@ -174,6 +194,90 @@ static const char *CAPS2useful = "CAPS2useful";
 #define CMD_SEQUENCE 103
 
 
+extern "C" {
+struct tVK_names {
+	uint8_t id;
+	const char *name;
+	const char *descr;
+};
+extern struct tVK_names vkey_names[];
+}
+
+
+static void
+SetChecked(HWND hWnd, void *_arg)
+{
+	(void)_arg;
+	SendMessage(hWnd, BM_SETCHECK, BST_CHECKED, 0);
+}
+
+
+static void
+PopulateKeyList(HWND hListBox, void *sel)
+{
+	int setSel = -1;
+	uint8_t selId = *(uint8_t *)sel;
+	char str[256];
+
+	for (int i = 0; vkey_names[i].name; i++) {
+		sprintf(str, "0x%02X ", vkey_names[i].id);
+		if (vkey_names[i].name[0]) {
+			strcat(str, "[");
+			strcat(str, vkey_names[i].name);
+			strcat(str, "]");
+		} else {
+			strcat(str, "     ");
+		}
+		sprintf(str + strlen(str), " - %s", vkey_names[i].descr);
+		int pos = SendMessageA(hListBox, LB_ADDSTRING, 0, (LPARAM)str);
+		SendMessageA(hListBox, LB_SETITEMDATA, pos, (LPARAM)vkey_names[i].id);
+		if (vkey_names[i].id == selId) {
+			setSel = pos;
+		}
+	}
+	SendMessage(hListBox, LB_SETCURSEL, setSel, 0);
+}
+
+
+static void
+PopulateHotkeyList(HWND hListBox, void *sel)
+{
+	char str[4096];
+
+	for (auto n : config.hotkey) {
+		char *c = str;
+		memset(str, 0, sizeof(str));
+
+		for (uint8_t a : n.first) {
+			c[0] = toHex(a >> 4);
+			c[1] = toHex(a & 15);
+			c += 2;
+		}
+		strcpy(c, " => ");
+		c += 4;
+		if (n.second.actType == 'X') {
+			strcpy(c, "exec: ");
+			c += 6;
+			for (uint8_t e : n.second.act) {
+				*c = (char)e;
+				c++;
+			}
+			*c = 0;
+		} else if (n.second.actType == 'K') {
+			strcpy(c, "keys: ");
+			c += 6;
+			for (uint8_t e : n.second.act) {
+				*c = (char)e;
+				c++;
+			}
+			*c = 0;
+		}
+		*c = 0;
+		SendMessageA(hListBox, LB_ADDSTRING, 0, (LPARAM)str);
+	}
+}
+
+
 static LRESULT CALLBACK
 TaskbarWndProc(_In_ HWND hWnd, _In_ UINT msg, _In_ WPARAM wParam, _In_ LPARAM lParam)
 {
@@ -193,7 +297,7 @@ TaskbarWndProc(_In_ HWND hWnd, _In_ UINT msg, _In_ WPARAM wParam, _In_ LPARAM lP
 			AppendMenu(hMenu, MF_SEPARATOR, CMD_NONE, "");
 			AppendMenu(hMenu, MF_STRING, CMD_SETTING, "Settings");
 			if (config.all_replace == 0) {
-				AppendMenu(hMenu, MF_STRING, CMD_SEQUENCE, "Teach Sequence");
+				AppendMenu(hMenu, MF_STRING, CMD_SEQUENCE, "Sequence List");
 			}
 			AppendMenu(hMenu, MF_SEPARATOR, CMD_NONE, "");
 			AppendMenu(hMenu, MF_STRING, CMD_EXIT, "Exit");
@@ -236,6 +340,7 @@ TaskbarWndProc(_In_ HWND hWnd, _In_ UINT msg, _In_ WPARAM wParam, _In_ LPARAM lP
 			IB.element[0].y = 10;
 			IB.element[0].width = 280;
 			IB.element[0].height = 10;
+			IB.element[0].Initialize = ((config.all_replace != 0) ? SetChecked : NULL);
 
 			IB.element[1].itemtype = "list";
 			IB.element[1].itemtext = "";
@@ -243,6 +348,8 @@ TaskbarWndProc(_In_ HWND hWnd, _In_ UINT msg, _In_ WPARAM wParam, _In_ LPARAM lP
 			IB.element[1].y = 25;
 			IB.element[1].width = 260;
 			IB.element[1].height = 60;
+			IB.element[1].Initialize = PopulateKeyList;
+			IB.element[1].initialze_arg = &(config.all_replace);
 
 			IB.element[2].itemtype = "radio";
 			IB.element[2].itemtext = "Use Caps Lock sequences";
@@ -250,30 +357,56 @@ TaskbarWndProc(_In_ HWND hWnd, _In_ UINT msg, _In_ WPARAM wParam, _In_ LPARAM lP
 			IB.element[2].y = 95;
 			IB.element[2].width = 280;
 			IB.element[2].height = 10;
+			IB.element[2].Initialize = ((config.all_replace == 0) ? SetChecked : NULL);
 
 			IB.element[3].itemtype = "button";
 			IB.element[3].itemtext = "OK";
 			IB.element[3].x = 30;
-			IB.element[3].y = 110;
+			IB.element[3].y = 120;
 			IB.element[3].width = 100;
 			IB.element[3].height = 15;
 			IB.element[4].itemtype = "button";
 			IB.element[4].itemtext = "Cancel";
 			IB.element[4].x = 170;
-			IB.element[4].y = 110;
+			IB.element[4].y = 120;
 			IB.element[4].width = 100;
 			IB.element[4].height = 15;
 
 			int r = InputBox(&IB);
-			if (r == 2 && IB.result == 1) {
-				/* r==2 .. Inputbox closed by button */
+			if ((r == 1) && (IB.button_result == 1)) {
+				/* r==1 .. Inputbox closed by button */
 				/* IB.result==1 .. Inputbox closed by first button ("OK") */
-				if ((IB.value[0].n == 1) && (IB.value[1].n > 0)) {
-					config.all_replace = (uint8_t)(IB.value[1].n);
+				if ((IB.element[0].value.n == 1) && (IB.element[1].value.n > 0)) {
+					config.all_replace = (uint8_t)(IB.element[1].value.n);
 				} else {
 					config.all_replace = 0;
 				}
 			}
+			return 0;
+		}
+		case CMD_SEQUENCE: {
+			char title[64];
+			sprintf(title, "%s Sequences", CAPS2useful);
+			struct INPUTBOX IB;
+			memset(&IB, 0, sizeof(IB));
+			IB.x = 100;
+			IB.y = 100;
+			IB.width = 300;
+			IB.height = 150;
+			IB.title = title;
+			IB.no_elements = 1;
+
+			IB.element[0].itemtype = "list";
+			IB.element[0].itemtext = "";
+			IB.element[0].x = 10;
+			IB.element[0].y = 10;
+			IB.element[0].width = 290;
+			IB.element[0].height = 140;
+			IB.element[0].Initialize = PopulateHotkeyList;
+			IB.element[0].initialze_arg = NULL;
+
+			InputBox(&IB);
+
 			return 0;
 		}
 		case CMD_EXIT: {
@@ -293,38 +426,26 @@ ReadConfigFile()
 {
 	wchar_t path[MAX_WPATH + 10] = {0};
 	DWORD len = GetModuleFileNameW(NULL, path, MAX_WPATH);
-	HANDLE hFile = INVALID_HANDLE_VALUE;
 
-	if ((len < (MAX_WPATH - 3)) && (len > 4) && (0 == wcsicmp(path + len - 4, L".exe"))) {
+	if ((len < (MAX_WPATH - 7)) && (len > 4) && (0 == wcsicmp(path + len - 4, L".exe"))) {
 		wcscpy(path + len - 4, L".keymap");
-		hFile = CreateFileW(
-		    path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		if (hFile != INVALID_HANDLE_VALUE) {
-			LARGE_INTEGER li = {0};
+		FILE *f = _wfopen(path, L"rb");
+		if (f != NULL) {
 			BOOL isValid = TRUE;
 			char fileKey[FILE_KEY_LEN] = {0};
 
-			GetFileSizeEx(hFile, &li);
-			SetFilePointer(hFile, 0, 0, FILE_BEGIN);
-
-			if (li.QuadPart <= FILE_KEY_LEN) {
+			size_t bytesRead = fread(fileKey, 1, FILE_KEY_LEN, f);
+			if (bytesRead != FILE_KEY_LEN) {
 				isValid = FALSE;
-			}
-			if (isValid) {
-				DWORD bytesRead = 0;
-				ReadFile(hFile, &fileKey, FILE_KEY_LEN, &bytesRead, NULL);
-				if (bytesRead != FILE_KEY_LEN) {
-					isValid = FALSE;
-				} else if (0 != memcmp(fileKey, FILE_KEY, FILE_KEY_LEN)) {
-					isValid = FALSE;
-				}
+			} else if (0 != memcmp(fileKey, FILE_KEY, FILE_KEY_LEN)) {
+				isValid = FALSE;
 			}
 
 			if (!isValid) {
 				wchar_t txt[256] = {0};
 				int dlgRet;
 				DWORD bytesWritten = 0;
-				BOOL ok = TRUE;
+				BOOL ok = FALSE;
 
 				wcscpy(txt, L"Configuration file invalid:\n");
 				wcscat(txt, path);
@@ -336,58 +457,48 @@ ReadConfigFile()
 					return FALSE;
 				}
 
-				/* Truncate */
-				if (SetFilePointer(hFile, 0, 0, FILE_BEGIN) == INVALID_SET_FILE_POINTER) {
-					ok = FALSE;
-				}
-				if (!SetEndOfFile(hFile)) {
-					ok = FALSE;
+				f = _wfopen(path, L"w+");
+				if (f) {
+					if (fwrite(FILE_KEY, 1, FILE_KEY_LEN, f) == FILE_KEY_LEN) {
+						if (0 == fflush(f)) {
+							ok = TRUE;
+						}
+					}
 				}
 
-				/* Write key */
-				if (!WriteFile(hFile, &FILE_KEY, FILE_KEY_LEN, &bytesWritten, NULL)) {
-					ok = FALSE;
-				}
-				if (!FlushFileBuffers(hFile)) {
-					ok = FALSE;
-				}
-				if (bytesWritten != FILE_KEY_LEN) {
-					ok = FALSE;
-				}
 				if (!ok) {
 					MessageBoxA(NULL, "Critical error writing config file.", CAPS2useful, MB_ICONERROR);
 					return FALSE;
 				}
 			}
 
-			SetFilePointer(hFile, FILE_KEY_LEN, 0, FILE_BEGIN);
+			fseek(f, FILE_KEY_LEN, SEEK_SET);
 
 			/* Read File line by line */
-			char fileChunk[1024] = {0};
-			uint32_t chunkFilled = 0;
-
-			for (;;) {
-				/* Fill buffer */
-				DWORD bytesRead = 0;
-				ReadFile(hFile, &fileChunk, sizeof(fileChunk) - chunkFilled, &bytesRead, NULL);
-				chunkFilled += bytesRead;
-				if (chunkFilled < sizeof(fileChunk)) {
-					ZeroMemory(fileChunk + chunkFilled, sizeof(fileChunk) - chunkFilled);
-				}
+			char line[1024] = {0};
+			while (fgets(line, sizeof(line), f) != NULL) {
+				char *c = line;
+				while (isspace(*c))
+					c++;
+				if (!*c)
+					continue;
+				if (*c == '#')
+					continue;
 
 				/* Process buffer */
-				if (0 == memcmp("ALL ", fileChunk, 4)) {
-					int8_t hi = fromHex(fileChunk[4]);
-					int8_t lo = fromHex(fileChunk[5]);
+				if (0 == memcmp("ALL ", c, 4)) {
+					int8_t hi = fromHex(c[4]);
+					int8_t lo = fromHex(c[5]);
 					if ((hi >= 0) && (lo >= 0)) {
 						config.all_replace = ((uint8_t)hi << 4) + (uint8_t)lo;
 					}
-				} else if (0 == memcmp("S ", fileChunk, 2)) {
+
+				} else if (0 == memcmp("S ", c, 2)) {
 					trigger trig;
 					int len;
 					for (len = 0; len < MAX_KEYLEN; len++) {
-						int8_t hi = fromHex(fileChunk[2 * len + 2]);
-						int8_t lo = fromHex(fileChunk[2 * len + 3]);
+						int8_t hi = fromHex(c[2 * len + 2]);
+						int8_t lo = fromHex(c[2 * len + 3]);
 						uint8_t hex = 0;
 						if ((hi >= 0) && (lo >= 0)) {
 							hex = ((uint8_t)hi << 4) + (uint8_t)lo;
@@ -397,7 +508,7 @@ ReadConfigFile()
 							break;
 					}
 					if (len > 0) {
-						char *cmd = fileChunk + 2 * len + 2;
+						char *cmd = c + 2 * len + 2;
 						while ((*cmd == ' ') || (*cmd == '\t') || (*cmd == '0'))
 							cmd++;
 						// if cmd
@@ -414,25 +525,14 @@ ReadConfigFile()
 								break;
 							cmd++;
 						}
-						config.hotkey[trig] = act;
+						if (isalpha(act.actType)) {
+							config.hotkey[trig] = act;
+						}
 					}
 				}
-
-				/* Shift buffer */
-				int i = 0;
-				while ((i < chunkFilled) && (fileChunk[i] != '\n'))
-					i++;
-				if (fileChunk[i] != '\n')
-					break;
-				fileChunk[i] = 0;
-				OutputDebugStringA(fileChunk);
-				i++; /* character after newline */
-				memmove(fileChunk, fileChunk + i, chunkFilled - i);
-				chunkFilled -= i;
-				ZeroMemory(fileChunk + chunkFilled, sizeof(fileChunk) - chunkFilled);
 			}
 
-			CloseHandle(hFile);
+			fclose(f);
 
 			return TRUE; // xxx
 

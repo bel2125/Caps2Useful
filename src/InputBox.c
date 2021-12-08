@@ -9,7 +9,6 @@
 struct dlg_proc_param {
 	HWND hWnd;
 	struct INPUTBOX *B;
-	int listBoxId;
 	int ret;
 };
 
@@ -22,8 +21,8 @@ DialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 		struct dlg_proc_param *pdlg_proc_param = (struct dlg_proc_param *)GetWindowLongPtr(hDlg, GWLP_USERDATA);
 		if ((pdlg_proc_param->hWnd == hDlg) && (pdlg_proc_param->B != NULL)) {
 			// condition should always be true
-			pdlg_proc_param->B->result = 0;
-			pdlg_proc_param->ret = 1;
+			pdlg_proc_param->B->button_result = 0;
+			pdlg_proc_param->ret = -1;
 		}
 		DestroyWindow(hDlg);
 	} break;
@@ -39,27 +38,28 @@ DialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 				struct dlg_proc_param *pdlg_proc_param = (struct dlg_proc_param *)GetWindowLongPtr(hDlg, GWLP_USERDATA);
 				if ((pdlg_proc_param->hWnd == hDlg) && (pdlg_proc_param->B != NULL)) {
 					// condition should always be true
-					pdlg_proc_param->B->result = result;
-					pdlg_proc_param->ret = 2;
+					pdlg_proc_param->B->button_result = result;
+					pdlg_proc_param->ret = 1;
 					int tabIndex = 0;
 
-					for (int i = 1; i < 0x1000; i++) {
+					for (int i = 1; i <= pdlg_proc_param->B->no_elements; i++) {
 						HWND hItem = GetDlgItem(hDlg, i);
-						if (!hItem)
-							break;
+						if (!hItem) {
+							continue;
+						}
 						char className[32] = {0};
 						GetClassName(hItem, className, sizeof(className));
 
 						if (!stricmp(className, "Button")) {
 
 							UINT r = IsDlgButtonChecked(hDlg, i);
-							pdlg_proc_param->B->value[pdlg_proc_param->B->no_values].type = _bool;
+							pdlg_proc_param->B->element[i - 1].value.type = _bool;
 							if (r == BST_CHECKED) {
-								pdlg_proc_param->B->value[pdlg_proc_param->B->no_values++].n = 1;
+								pdlg_proc_param->B->element[i - 1].value.n = 1;
 							} else if (r == BST_UNCHECKED) {
-								pdlg_proc_param->B->value[pdlg_proc_param->B->no_values++].n = 0;
+								pdlg_proc_param->B->element[i - 1].value.n = 0;
 							} else {
-								pdlg_proc_param->B->value[pdlg_proc_param->B->no_values++].n = -1;
+								pdlg_proc_param->B->element[i - 1].value.n = -1;
 							}
 
 						} else if (!stricmp(className, "Edit")) {
@@ -82,12 +82,16 @@ DialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 
 							if ((dwStyle & ES_NUMBER) == ES_NUMBER) {
 								long long nr = strtoll(utf8, NULL, 10);
-								pdlg_proc_param->B->value[pdlg_proc_param->B->no_values].type = _nr;
-								pdlg_proc_param->B->value[pdlg_proc_param->B->no_values++].n = nr;
+								pdlg_proc_param->B->element[i - 1].value.type = _nr;
+								pdlg_proc_param->B->element[i - 1].value.n = nr;
 							} else {
-								pdlg_proc_param->B->value[pdlg_proc_param->B->no_values].type = _str;
-								strcpy(pdlg_proc_param->B->value[pdlg_proc_param->B->no_values].s, utf8); /* XXX */
-								pdlg_proc_param->B->no_values++;
+								pdlg_proc_param->B->element[i - 1].value.type = _str;
+								memset(pdlg_proc_param->B->element[i - 1].value.s,
+								       0,
+								       sizeof(pdlg_proc_param->B->element[i - 1].value.s));
+								strncpy(pdlg_proc_param->B->element[i - 1].value.s,
+								        utf8,
+								        sizeof(pdlg_proc_param->B->element[i - 1].value.s) - 1);
 							}
 
 							free(utf8);
@@ -95,8 +99,8 @@ DialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 						} else if (!stricmp(className, "ListBox")) {
 							int pos = SendMessage(hItem, LB_GETCURSEL, 0, 0);
 							int nr = (int)SendMessage(hItem, LB_GETITEMDATA, pos, 0);
-							pdlg_proc_param->B->value[pdlg_proc_param->B->no_values].type = _nr;
-							pdlg_proc_param->B->value[pdlg_proc_param->B->no_values++].n = nr;
+							pdlg_proc_param->B->element[i - 1].value.type = _nr;
+							pdlg_proc_param->B->element[i - 1].value.n = nr;
 						}
 					}
 					// all parameters stored to Lua state
@@ -112,9 +116,17 @@ DialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 		pdlg_proc_param->ret = 0;
 		SetWindowLongPtr(hDlg, GWLP_USERDATA, (LONG_PTR)pdlg_proc_param);
 
-		if (pdlg_proc_param->listBoxId) {
-			HWND hListBox = GetDlgItem(hDlg, pdlg_proc_param->listBoxId);
-			PopulateKeyList(hListBox);
+		if (pdlg_proc_param->B) {
+			for (int i = 1; i <= pdlg_proc_param->B->no_elements; i++) {
+				HWND hItem = GetDlgItem(hDlg, i);
+				if (!hItem) {
+					continue;
+				}
+				if (pdlg_proc_param->B->element[i - 1].Initialize) {
+					pdlg_proc_param->B->element[i - 1].Initialize(hItem,
+					                                              pdlg_proc_param->B->element[i - 1].initialze_arg);
+				}
+			}
 		}
 
 	} break;
@@ -142,7 +154,6 @@ InputBox(struct INPUTBOX *B)
 	memset(&dlg_prm, 0, sizeof(dlg_prm));
 	dlg_prm.B = B;
 	SHORT button_count = 0;
-	SHORT input_count = 0;
 
 	HINSTANCE hinst = NULL;
 	HWND hwndOwner = NULL;
@@ -223,51 +234,43 @@ InputBox(struct INPUTBOX *B)
 			lpdit->id = 0x1000 + button_count;
 		}
 		if (!stricmp(B->element[i].itemtype, "check") || !stricmp(B->element[i].itemtype, "boolean")) {
-			input_count++;
 			dlg_class = 0x0080;
 			lpdit->style |= BS_AUTOCHECKBOX;
-			lpdit->id = input_count;
+			lpdit->id = i + 1;
 		}
 		if (!stricmp(B->element[i].itemtype, "radio")) {
-			input_count++;
 			dlg_class = 0x0080;
 			lpdit->style |= BS_AUTORADIOBUTTON;
-			lpdit->id = input_count;
+			lpdit->id = i + 1;
 		}
 		if (!stricmp(B->element[i].itemtype, "3state")) {
-			input_count++;
 			dlg_class = 0x0080;
 			lpdit->style |= BS_AUTO3STATE;
-			lpdit->id = input_count;
+			lpdit->id = i + 1;
 		}
 		if (!stricmp(B->element[i].itemtype, "edit") || !stricmp(B->element[i].itemtype, "string")) {
-			input_count++;
 			dlg_class = 0x0081;
 			lpdit->style |= WS_BORDER | ES_AUTOHSCROLL;
-			lpdit->id = input_count;
+			lpdit->id = i + 1;
 		}
 		if (!stricmp(B->element[i].itemtype, "text") || !stricmp(B->element[i].itemtype, "multiline")) {
-			input_count++;
 			dlg_class = 0x0081;
 			lpdit->style |= WS_BORDER | ES_AUTOHSCROLL | ES_MULTILINE;
 			lpdit->style |= ES_WANTRETURN | WS_VSCROLL | ES_AUTOVSCROLL;
-			lpdit->id = input_count;
+			lpdit->id = i + 1;
 		}
 		if (!stricmp(B->element[i].itemtype, "number")) {
-			input_count++;
 			dlg_class = 0x0081;
 			lpdit->style |= WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER;
-			lpdit->id = input_count;
+			lpdit->id = i + 1;
 		}
 		if (!stricmp(B->element[i].itemtype, "static") || !stricmp(B->element[i].itemtype, "label")) {
 			dlg_class = 0x0082;
 		}
 		if (!stricmp(B->element[i].itemtype, "list")) {
-			input_count++;
 			dlg_class = 0x0083;
 			lpdit->style |= WS_BORDER | WS_VSCROLL | ES_AUTOVSCROLL;
-			lpdit->id = input_count;
-			dlg_prm.listBoxId = input_count;
+			lpdit->id = i + 1;
 		}
 #if 0
     if (!stricmp(B->element[i].itemtype, "scroll")) {
