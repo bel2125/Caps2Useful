@@ -1,9 +1,11 @@
 /* Caps2Useful for Windows. See "README.md" file for details. */
 #include "InputBox.h"
+#include "KeyList.h"
 #include "Windows.h"
+#include "commctrl.h"
 #define MAX_WPATH (MAX_PATH) /* Windows path limit of 260 wchar_t */
 
-#define VERSION "0.5.0.3"
+#define VERSION "0.5.0.4"
 
 /* Tell Visual Studio to use C according to the C standard. */
 #define _CRT_SECURE_NO_DEPRECATE
@@ -12,6 +14,7 @@
 #include <map>
 #include <stdint.h>
 #include <stdio.h>
+#include <string>
 #include <vector>
 #define snprintf _snprintf
 #define vsnprintf _vsnprintf
@@ -194,16 +197,6 @@ static const char *CAPS2useful = "CAPS2useful";
 #define CMD_SEQUENCE 103
 
 
-extern "C" {
-struct tVK_names {
-	uint8_t id;
-	const char *name;
-	const char *descr;
-};
-extern struct tVK_names vkey_names[];
-}
-
-
 static void
 SetChecked(HWND hWnd, void *_arg)
 {
@@ -213,67 +206,128 @@ SetChecked(HWND hWnd, void *_arg)
 
 
 static void
-PopulateKeyList(HWND hListBox, void *sel)
+PopulateKeyList(HWND hListView, void *sel)
 {
+	LVCOLUMN lvColumn;
+	ZeroMemory(&lvColumn, sizeof(lvColumn));
+	lvColumn.mask = LVCF_FMT | LVCF_TEXT | LVCF_WIDTH;
+	lvColumn.fmt = LVCFMT_LEFT;
+	lvColumn.cx = 50;
+	lvColumn.pszText = ("ID");
+	ListView_InsertColumn(hListView, 0, &lvColumn);
+	lvColumn.cx = 80;
+	lvColumn.pszText = ("Name");
+	ListView_InsertColumn(hListView, 1, &lvColumn);
+	lvColumn.cx = 250;
+	lvColumn.pszText = ("Description");
+	ListView_InsertColumn(hListView, 2, &lvColumn);
+
 	int setSel = -1;
 	uint8_t selId = *(uint8_t *)sel;
 	char str[256];
 
 	for (int i = 0; vkey_names[i].name; i++) {
 		sprintf(str, "0x%02X ", vkey_names[i].id);
-		if (vkey_names[i].name[0]) {
-			strcat(str, "[");
-			strcat(str, vkey_names[i].name);
-			strcat(str, "]");
-		} else {
-			strcat(str, "     ");
-		}
-		sprintf(str + strlen(str), " - %s", vkey_names[i].descr);
-		int pos = SendMessageA(hListBox, LB_ADDSTRING, 0, (LPARAM)str);
-		SendMessageA(hListBox, LB_SETITEMDATA, pos, (LPARAM)vkey_names[i].id);
+		LVITEMA item;
+		ZeroMemory(&item, sizeof(item));
+		item.mask = LVIF_TEXT | LVIF_PARAM;
+		item.pszText = str;
+		item.iItem = i;
+		item.lParam = (LPARAM)vkey_names[i].id;
+		int pos = ListView_InsertItem(hListView, &item);
+
 		if (vkey_names[i].id == selId) {
 			setSel = pos;
 		}
+
+		item.mask = LVIF_TEXT;
+		item.iItem = i;
+		item.iSubItem = 1;
+		sprintf(str, "%s", vkey_names[i].name);
+		ListView_SetItem(hListView, &item);
+
+		item.iSubItem = 2;
+		sprintf(str, "%s", vkey_names[i].descr);
+		ListView_SetItem(hListView, &item);
 	}
-	SendMessage(hListBox, LB_SETCURSEL, setSel, 0);
+
+	ListView_SetSelectionMark(hListView, setSel);
+	ListView_SetItemState(hListView, setSel, LVNI_SELECTED | LVNI_FOCUSED, LVNI_SELECTED | LVNI_FOCUSED);
 }
 
 
 static void
-PopulateHotkeyList(HWND hListBox, void *sel)
+PopulateHotkeyList(HWND hListView, void *sel)
 {
-	char str[4096];
+	LVCOLUMN lvColumn;
+	ZeroMemory(&lvColumn, sizeof(lvColumn));
+	lvColumn.mask = LVCF_FMT | LVCF_TEXT | LVCF_WIDTH;
+	lvColumn.fmt = LVCFMT_LEFT;
+	lvColumn.cx = 150;
+	lvColumn.pszText = ("Triger");
+	ListView_InsertColumn(hListView, 0, &lvColumn);
+	lvColumn.cx = 65;
+	lvColumn.pszText = ("Action");
+	ListView_InsertColumn(hListView, 1, &lvColumn);
+	lvColumn.cx = 360;
+	lvColumn.pszText = ("Action Detail");
+	ListView_InsertColumn(hListView, 2, &lvColumn);
+
+	int i = 0;
 
 	for (auto n : config.hotkey) {
-		char *c = str;
-		memset(str, 0, sizeof(str));
+		std::string trig_key;
+		std::string act_type;
+		std::string act_details;
 
 		for (uint8_t a : n.first) {
-			c[0] = toHex(a >> 4);
-			c[1] = toHex(a & 15);
-			c += 2;
+			trig_key += GetKeyName(a);
 		}
-		strcpy(c, " => ");
-		c += 4;
+
 		if (n.second.actType == 'X') {
-			strcpy(c, "exec: ");
-			c += 6;
+			act_type = "execute";
 			for (uint8_t e : n.second.act) {
-				*c = (char)e;
-				c++;
+				act_details += (char)e;
 			}
-			*c = 0;
 		} else if (n.second.actType == 'K') {
-			strcpy(c, "keys: ");
-			c += 6;
+			act_type = "keys";
+			int step = 0;
+			int hex = 0;
 			for (uint8_t e : n.second.act) {
-				*c = (char)e;
-				c++;
+				if (step == 0) {
+					hex = (uint8_t)fromHex(e) << 4;
+					step++;
+				} else if (step == 1) {
+					hex += (uint8_t)fromHex(e);
+					step++;
+				} else {
+					act_details += GetKeyName(hex);
+					act_details += (char)e;
+					step = 0;
+				}
 			}
-			*c = 0;
 		}
-		*c = 0;
-		SendMessageA(hListBox, LB_ADDSTRING, 0, (LPARAM)str);
+
+		/* Add Item to ListView */
+		LVITEMA item;
+		ZeroMemory(&item, sizeof(item));
+		item.mask = LVIF_TEXT | LVIF_PARAM;
+		item.pszText = (char *)trig_key.c_str();
+		item.iItem = i;
+		item.lParam = i;
+		int pos = ListView_InsertItem(hListView, &item);
+
+		item.mask = LVIF_TEXT;
+		item.iItem = i;
+		item.iSubItem = 1;
+		item.pszText = (char *)act_type.c_str();
+		ListView_SetItem(hListView, &item);
+
+		item.iSubItem = 2;
+		item.pszText = (char *)act_details.c_str();
+		ListView_SetItem(hListView, &item);
+
+		i++;
 	}
 }
 
@@ -553,7 +607,6 @@ ReadConfigFile()
 void
 GetOwnVersion(char *fileVersionString, char *productVersionString /* >= 24 byte */)
 {
-
 	DWORD dwHandle = 0;
 	DWORD dwSize;
 	wchar_t path[MAX_WPATH + 1] = {0};
@@ -603,6 +656,25 @@ CompareVersion(void)
 }
 
 
+int
+IsSingleInstance(void)
+{
+	SECURITY_DESCRIPTOR sd;
+	ZeroMemory(&sd, sizeof(sd));
+	InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+	SetSecurityDescriptorDacl(&sd, TRUE, NULL, FALSE);
+
+	SECURITY_ATTRIBUTES sa;
+	ZeroMemory(&sa, sizeof(sa));
+	sa.nLength = sizeof(sa);
+	sa.lpSecurityDescriptor = &sd;
+	sa.bInheritHandle = TRUE;
+
+	HANDLE hObj = CreateMutexA(&sa, FALSE, CAPS2useful);
+	return (WAIT_OBJECT_0 == WaitForSingleObject(hObj, 0));
+}
+
+
 /* Program entry point. */
 int WINAPI
 WinMain(_In_ HINSTANCE hInst, _In_ HINSTANCE hPrev, _In_ LPSTR cmdline, _In_ int show)
@@ -618,11 +690,12 @@ WinMain(_In_ HINSTANCE hInst, _In_ HINSTANCE hPrev, _In_ LPSTR cmdline, _In_ int
 	(void)cmdline;
 	(void)show;
 
-
+	if (!IsSingleInstance()) {
+		return 0;
+	}
 	if (!CompareVersion()) {
 		MessageBeep(MB_ICONERROR);
 	}
-
 	if (!ReadConfigFile()) {
 		return 1;
 	}
@@ -637,6 +710,11 @@ WinMain(_In_ HINSTANCE hInst, _In_ HINSTANCE hPrev, _In_ LPSTR cmdline, _In_ int
 	ShowWindow(hWnd, SW_HIDE);
 
 	hIcon = (HICON)LoadImage(GetModuleHandle(NULL), MAKEINTRESOURCE(RC_ICON_ID), IMAGE_ICON, 16, 16, 0);
+
+	INITCOMMONCONTROLSEX ic;
+	ic.dwSize = sizeof(ic);
+	ic.dwICC = ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES | ICC_TAB_CLASSES | ICC_TREEVIEW_CLASSES;
+	InitCommonControlsEx(&ic);
 
 	memset(&TrayIcon, 0, sizeof(TrayIcon));
 	TrayIcon.cbSize = sizeof(TrayIcon);

@@ -1,12 +1,8 @@
+
+#include "KeyList.h"
 #include <stdint.h>
 
 /* Key names */
-struct tVK_names {
-	uint8_t id;
-	const char *name;
-	const char *descr;
-};
-
 struct tVK_names vkey_names[] = {
     /*
     {0x01, "", "Left mouse button"},
@@ -265,3 +261,21 @@ struct tVK_names vkey_names[] = {
     {0xFD, "", "PA1 key"},
     {0xFE, "", "Clear key"},
     {0, NULL, NULL}};
+
+
+const char *
+GetKeyName(uint8_t a)
+{
+	static char keyName[64];
+
+	for (int i = 0; vkey_names[i].name; i++) {
+		if (vkey_names[i].id == a) {
+			if (vkey_names[i].name[0]) {
+				sprintf(keyName, "[%s]", vkey_names[i].name);
+			} else {
+				sprintf(keyName, "[%02X]", a);
+			}
+		}
+	}
+	return keyName;
+}

@@ -1,5 +1,6 @@
 #include "InputBox.h"
 #include <Windows.h>
+#include <commctrl.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,7 +51,7 @@ DialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 						char className[32] = {0};
 						GetClassName(hItem, className, sizeof(className));
 
-						if (!stricmp(className, "Button")) {
+						if (!stricmp(className, WC_BUTTONA)) {
 
 							UINT r = IsDlgButtonChecked(hDlg, i);
 							pdlg_proc_param->B->element[i - 1].value.type = _bool;
@@ -62,7 +63,7 @@ DialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 								pdlg_proc_param->B->element[i - 1].value.n = -1;
 							}
 
-						} else if (!stricmp(className, "Edit")) {
+						} else if (!stricmp(className, WC_EDITA)) {
 
 							DWORD dwStyle = (DWORD)GetWindowLong(hItem, GWL_STYLE);
 							int len = GetWindowTextLengthW(hItem) + 1;
@@ -96,11 +97,18 @@ DialogProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 
 							free(utf8);
 							free(utf16);
-						} else if (!stricmp(className, "ListBox")) {
-							int pos = SendMessage(hItem, LB_GETCURSEL, 0, 0);
-							int nr = (int)SendMessage(hItem, LB_GETITEMDATA, pos, 0);
+
+						} else if (!stricmp(className, WC_LISTVIEWA)) {
+
+							int pos = ListView_GetSelectionMark(hItem);
+							LVITEMA item;
+							ZeroMemory(&item, sizeof(item));
+							item.mask = LVIF_PARAM;
+							item.iItem = pos;
+							ListView_GetItem(hItem, &item);
+							long long num = (long long)item.lParam;
 							pdlg_proc_param->B->element[i - 1].value.type = _nr;
-							pdlg_proc_param->B->element[i - 1].value.n = nr;
+							pdlg_proc_param->B->element[i - 1].value.n = num;
 						}
 					}
 					// all parameters stored to Lua state
@@ -222,7 +230,7 @@ InputBox(struct INPUTBOX *B)
 
 		// see
 		// https://docs.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-dlgitemtemplate
-		WORD dlg_class = 0x0082;
+		WCHAR *dlg_class_name = NULL;
 		if (!stricmp(B->element[i].itemtype, "button")) {
 			button_count++;
 			if (button_count == 1) {
@@ -230,60 +238,55 @@ InputBox(struct INPUTBOX *B)
 			} else {
 				lpdit->style |= BS_PUSHBUTTON;
 			}
-			dlg_class = 0x0080;
+			dlg_class_name = WC_BUTTONW;
 			lpdit->id = 0x1000 + button_count;
 		}
 		if (!stricmp(B->element[i].itemtype, "check") || !stricmp(B->element[i].itemtype, "boolean")) {
-			dlg_class = 0x0080;
+			dlg_class_name = WC_BUTTONW;
 			lpdit->style |= BS_AUTOCHECKBOX;
 			lpdit->id = i + 1;
 		}
 		if (!stricmp(B->element[i].itemtype, "radio")) {
-			dlg_class = 0x0080;
+			dlg_class_name = WC_BUTTONW;
 			lpdit->style |= BS_AUTORADIOBUTTON;
 			lpdit->id = i + 1;
 		}
 		if (!stricmp(B->element[i].itemtype, "3state")) {
-			dlg_class = 0x0080;
+			dlg_class_name = WC_BUTTONW;
 			lpdit->style |= BS_AUTO3STATE;
 			lpdit->id = i + 1;
 		}
 		if (!stricmp(B->element[i].itemtype, "edit") || !stricmp(B->element[i].itemtype, "string")) {
-			dlg_class = 0x0081;
+			dlg_class_name = WC_EDITW;
 			lpdit->style |= WS_BORDER | ES_AUTOHSCROLL;
 			lpdit->id = i + 1;
 		}
 		if (!stricmp(B->element[i].itemtype, "text") || !stricmp(B->element[i].itemtype, "multiline")) {
-			dlg_class = 0x0081;
+			dlg_class_name = WC_EDITW;
 			lpdit->style |= WS_BORDER | ES_AUTOHSCROLL | ES_MULTILINE;
 			lpdit->style |= ES_WANTRETURN | WS_VSCROLL | ES_AUTOVSCROLL;
 			lpdit->id = i + 1;
 		}
 		if (!stricmp(B->element[i].itemtype, "number")) {
-			dlg_class = 0x0081;
+			dlg_class_name = WC_EDITW;
 			lpdit->style |= WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER;
 			lpdit->id = i + 1;
 		}
 		if (!stricmp(B->element[i].itemtype, "static") || !stricmp(B->element[i].itemtype, "label")) {
-			dlg_class = 0x0082;
+			dlg_class_name = WC_STATICW;
 		}
 		if (!stricmp(B->element[i].itemtype, "list")) {
-			dlg_class = 0x0083;
+			dlg_class_name = WC_LISTVIEWW;
 			lpdit->style |= WS_BORDER | WS_VSCROLL | ES_AUTOVSCROLL;
+			lpdit->style |= LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL;
 			lpdit->id = i + 1;
 		}
-#if 0
-    if (!stricmp(B->element[i].itemtype, "scroll")) {
-      dlg_class = 0x0084;
-    }
-	if (!stricmp(B->element[i].itemtype, "combo")) {
-		dlg_class = 0x0085;
-	}
-#endif
 
 		lpw = (LPWORD)(lpdit + 1);
-		*lpw++ = 0xFFFF;
-		*lpw++ = dlg_class;
+		while (*dlg_class_name) {
+			*lpw++ = *dlg_class_name++;
+		}
+		*lpw++ = 0;
 
 		lpwsz = (LPWSTR)lpw;
 		nchar = 1 + MultiByteToWideChar(CP_UTF8, 0, B->element[i].itemtext, -1, lpwsz, 100);

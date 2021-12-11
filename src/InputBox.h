@@ -1,4 +1,6 @@
-#pragma once
+#ifndef INPUTBOX_H
+#define INPUTBOX_H
+
 #include "Windows.h"
 #include <stdint.h>
 
@@ -40,4 +42,6 @@ int InputBox(struct INPUTBOX *B);
 
 #ifdef __cplusplus
 }
+#endif
+
 #endif
