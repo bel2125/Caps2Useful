@@ -5,7 +5,7 @@
 #include "commctrl.h"
 #define MAX_WPATH (MAX_PATH) /* Windows path limit of 260 wchar_t */
 
-#define VERSION "0.5.0.4"
+#define VERSION "0.5.1.0"
 
 /* Tell Visual Studio to use C according to the C standard. */
 #define _CRT_SECURE_NO_DEPRECATE
@@ -511,7 +511,7 @@ ReadConfigFile()
 					return FALSE;
 				}
 
-				f = _wfopen(path, L"w+");
+				f = _wfopen(path, L"w+b");
 				if (f) {
 					if (fwrite(FILE_KEY, 1, FILE_KEY_LEN, f) == FILE_KEY_LEN) {
 						if (0 == fflush(f)) {
@@ -532,12 +532,27 @@ ReadConfigFile()
 			char line[1024] = {0};
 			while (fgets(line, sizeof(line), f) != NULL) {
 				char *c = line;
-				while (isspace(*c))
+				while (isspace(*c)) {
 					c++;
-				if (!*c)
+				}
+				if ((!*c) || (*c == '#')) {
 					continue;
-				if (*c == '#')
-					continue;
+				}
+				char *eol = strchr(c, '\r');
+				if (eol) *eol = 0;
+				eol = strchr(c, '\n');
+				if (eol) *eol = 0;
+				char *t = strchr(c, '\t');
+				while (t) {
+					*t = ' ';
+					t = strchr(c, '\t');
+				}
+				char *ss = strstr(c, "  ");
+				while (ss) {
+					size_t l = strlen(ss);
+					memmove(ss, ss + 1, l);
+					ss = strstr(c, "  ");
+				}
 
 				/* Process buffer */
 				if (0 == memcmp("ALL ", c, 4)) {
