@@ -531,27 +531,47 @@ ReadConfigFile()
 			/* Read File line by line */
 			char line[1024] = {0};
 			while (fgets(line, sizeof(line), f) != NULL) {
-				char *c = line;
-				while (isspace(*c)) {
-					c++;
-				}
-				if ((!*c) || (*c == '#')) {
-					continue;
-				}
-				char *eol = strchr(c, '\r');
+				/* Terminate line */
+				char *eol = strchr(line, '\r');
 				if (eol) *eol = 0;
-				eol = strchr(c, '\n');
+				eol = strchr(line, '\n');
 				if (eol) *eol = 0;
-				char *t = strchr(c, '\t');
+				eol = strchr(line, '#');
+				if (eol) *eol = 0;
+
+				/* Tab to space */
+				char *t = strchr(line, '\t');
 				while (t) {
 					*t = ' ';
-					t = strchr(c, '\t');
+					t = strchr(line, '\t');
 				}
-				char *ss = strstr(c, "  ");
+
+				/* Multiple space to single space */
+				char *ss = strstr(line, "  ");
 				while (ss) {
 					size_t l = strlen(ss);
 					memmove(ss, ss + 1, l);
-					ss = strstr(c, "  ");
+					ss = strstr(line, "  ");
+				}
+
+				/* Remove leading space */
+				while (line[0] == ' ') {
+					size_t l = strlen(line);
+					memmove(line, line + 1, l);
+				}
+
+				/* Remove trailing space */
+				for (;;) {
+					size_t l = strlen(line);
+					if ((l > 0) && (line[l - 1] == ' ')) {
+						line[l - 1] = 0;
+					}
+					else break;
+				}
+
+				/* Ignore empty lines */
+				if (!line[0]) {
+					continue;
 				}
 
 				/* Process buffer */
